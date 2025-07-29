@@ -31,7 +31,7 @@ repo_to_top_folder = {
     "facebookresearch/hydra": "hydra",
     "bokeh/boke": "bokeh",
     "Project-MONAI/MONAI": "monai",
-
+    "bokeh/bokeh": " bokeh",
 }
 
 
@@ -76,9 +76,8 @@ def clone_repo(repo_name, repo_playground):
 
 
 def get_project_structure_from_scratch(
-    repo_name, commit_id, instance_id, repo_playground
+        repo_name, commit_id, instance_id, repo_playground
 ):
-
     # Generate a temperary folder and add uuid to avoid collision
     repo_playground = os.path.join(repo_playground, str(uuid.uuid4()))
 
@@ -139,8 +138,8 @@ def parse_python_file(file_path, file_content=None):
                             "start_line": n.lineno,
                             "end_line": n.end_lineno,
                             "text": file_content.splitlines()[
-                                n.lineno - 1 : n.end_lineno
-                            ],
+                                    n.lineno - 1: n.end_lineno
+                                    ],
                         }
                     )
                     class_methods.add(n.name)
@@ -150,13 +149,13 @@ def parse_python_file(file_path, file_content=None):
                     "start_line": node.lineno,
                     "end_line": node.end_lineno,
                     "text": file_content.splitlines()[
-                        node.lineno - 1 : node.end_lineno
-                    ],
+                            node.lineno - 1: node.end_lineno
+                            ],
                     "methods": methods,
                 }
             )
         elif isinstance(node, ast.FunctionDef) and not isinstance(
-            node, ast.AsyncFunctionDef
+                node, ast.AsyncFunctionDef
         ):
             if node.name not in class_methods:
                 function_names.append(
@@ -165,8 +164,8 @@ def parse_python_file(file_path, file_content=None):
                         "start_line": node.lineno,
                         "end_line": node.end_lineno,
                         "text": file_content.splitlines()[
-                            node.lineno - 1 : node.end_lineno
-                        ],
+                                node.lineno - 1: node.end_lineno
+                                ],
                     }
                 )
 
