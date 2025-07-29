@@ -56,7 +56,7 @@ def clone_repo(repo_name, repo_playground):
     try:
 
         print(
-            f"Cloning repository from https://github.com/{repo_name}.git to {repo_playground}/{repo_to_top_folder[repo_name]}..."
+            f"Cloning repository from https://ghfast.top/https://github.com/{repo_name}.git to {repo_playground}/{repo_to_top_folder[repo_name]}..."
         )
         subprocess.run(
             [
