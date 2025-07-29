@@ -62,7 +62,7 @@ def clone_repo(repo_name, repo_playground):
             [
                 "git",
                 "clone",
-                f"https://github.com/{repo_name}.git",
+                f"https://ghfast.top/https://github.com/{repo_name}.git",
                 f"{repo_playground}/{repo_to_top_folder[repo_name]}",
             ],
             check=True,
