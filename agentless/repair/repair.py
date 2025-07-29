@@ -789,10 +789,6 @@ def main():
 
     args = parser.parse_args()
 
-    assert (not "deepseek" in args.model) or (
-        args.backend == "deepseek"
-    ), "Must specify `--backend deepseek` if using a DeepSeek model"
-
     # diff_format and str_replace_format cannot be both True
     assert not (
         args.diff_format and args.str_replace_format
