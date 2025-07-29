@@ -21,6 +21,17 @@ repo_to_top_folder = {
     "psf/requests": "requests",
     "pylint-dev/pylint": "pylint",
     "pallets/flask": "flask",
+    "getmoto/moto": "moto",
+    "python/mypy": "mypy",
+    "conan-io/conan": "conan",
+    "iterative/dvc": "dvc",
+    "dask/dask": "dask",
+    "pydantic/pydantic": "pydantic",
+    "pandas-dev/pandas": "pandas",
+    "facebookresearch/hydra": "hydra",
+    "bokeh/boke": "bokeh",
+    "Project-MONAI/MONAI": "monai",
+
 }
 
 
@@ -60,6 +71,7 @@ def clone_repo(repo_name, repo_playground):
     except subprocess.CalledProcessError as e:
         print(f"An error occurred while running git command: {e}")
     except Exception as e:
+        raise e
         print(f"An unexpected error occurred: {e}")
 
 
