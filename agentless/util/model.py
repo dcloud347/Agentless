@@ -406,7 +406,7 @@ class CustomBackendChatDecoder(DecoderBase):
                 model=self.name,
             )
             ret = request_chatgpt_engine(
-                config, self.logger, base_url=settings.BACKEND_URL
+                config, self.logger, base_url=settings.BACKEND_URL, api_key=settings.BACKEND_API_KEY
             )
             if ret:
                 trajs.append(
