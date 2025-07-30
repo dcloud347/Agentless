@@ -16,6 +16,7 @@ from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.schema import MetadataMode
 from llama_index.embeddings.openai import OpenAIEmbedding
 
+from agentless.config import settings
 from agentless.util.api_requests import num_tokens_from_messages
 from agentless.util.index_skeleton import parse_global_stmt_from_code
 from agentless.util.preprocess_data import (
@@ -257,7 +258,9 @@ class EmbeddingIndex(ABC):
                 )  # embedding dimension does not matter for mocking.
                 Settings.callback_manager = CallbackManager([token_counter])
             else:
-                embed_model = OpenAIEmbedding(model_name="text-embedding-3-small")
+                embed_model = OpenAIEmbedding(model_name="text-embedding-3-small",
+                                              api_base=settings.BACKEND_URL,
+                                              api_key=settings.BACKEND_API_KEY)
             index = VectorStoreIndex.from_documents(documents, embed_model=embed_model)
             index.storage_context.persist(persist_dir=persist_dir)
         else:
