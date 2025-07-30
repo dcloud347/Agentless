@@ -75,6 +75,7 @@ def retrieve_locs(bug, args, swe_bench_data, found_files, prev_o, write_lock=Non
 
     if write_lock is not None:
         write_lock.acquire()
+    logger.info(f"Saving results for {instance_id} to {args.output_file}")
     with open(args.output_file, "a") as f:
         f.write(
             json.dumps(
