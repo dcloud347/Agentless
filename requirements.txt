@@ -7,4 +7,4 @@ libcst
 llama-index
 jsonlines
 dynaconf
-swebench @ git+https://github.com/princeton-nlp/SWE-bench
+swebench @ git+https://github.com/princeton-nlp/SWE-bench@2.1.7
