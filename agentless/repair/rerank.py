@@ -17,13 +17,16 @@ def _load_results(args):
 
     intervals = [(0, int(args.num_samples / len(roots)) - 1) for _ in range(len(roots))]
 
+    id = 0
+
     interval = intervals[0]
     for i in range(interval[0], interval[1] + 1):
         for _, root in enumerate(roots):
             patches = load_jsonl(root / f"output_{i}_normalized.jsonl")
             print(
-                f"Loaded {len(patches)} patches from {root / f'output_{i}_normalized.jsonl'}"
+                f"Candidate Patch ID:{id} Loaded {len(patches)} patches from {root / f'output_{i}_normalized.jsonl'}"
             )
+            id += 1
             if args.regression:
                 regression_test_results = load_jsonl(
                     root / f"output_{i}_regression_test_results.jsonl"
@@ -238,6 +241,10 @@ def majority_voting(args):
                             -first_appear_idx[patch_keys[i]],
                         ),
                     )
+
+                    if args.selected_patch_id_file is not None:
+                        selected_patch_id_dict[instance_id] = maj_selected_id
+
                     patch = get_sample(instance_id, maj_selected_id)["patch"]
                     result = {
                         "model_name_or_path": "agentless",
@@ -246,6 +253,10 @@ def majority_voting(args):
                     }
                 else:
                     print(f"No raw patches valid for {instance_id}")
+
+                    if args.selected_patch_id_file is not None:
+                        selected_patch_id_dict[instance_id] = None
+
                     result = {
                         "model_name_or_path": "agentless",
                         "instance_id": instance_id,
