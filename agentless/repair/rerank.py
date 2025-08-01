@@ -46,14 +46,14 @@ def _load_results(args):
 
                 if args.reproduction:
                     if (
-                        len(
-                            [
-                                x
-                                for x in reproduction_test_results
-                                if x["instance_id"] == patch["instance_id"]
-                            ]
-                        )
-                        == 1
+                            len(
+                                [
+                                    x
+                                    for x in reproduction_test_results
+                                    if x["instance_id"] == patch["instance_id"]
+                                ]
+                            )
+                            == 1
                     ):
                         reproduction_test_result = [
                             x
@@ -154,6 +154,7 @@ def modified_length(normalized_patch):
 
 
 def majority_voting(args):
+    selected_patch_id_dict = {}
 
     with open(args.output_file, "w") as f:
 
@@ -197,8 +198,8 @@ def majority_voting(args):
                     i
                     for i in range(len(execution_results[instance_id]))
                     if patch_keys[i].strip()
-                    and regression_tests[i]
-                    and reproduction_tests[i]
+                       and regression_tests[i]
+                       and reproduction_tests[i]
                 ]
                 if len(patch_ids) == 0:
                     # reset to just using the all regression passing patches
@@ -217,7 +218,7 @@ def majority_voting(args):
             if not patch_ids:
                 # just vote on all patches
                 if not all([x.strip() == "" for x in raw_patches]) and not all(
-                    [x.strip() == "" for x in patch_keys]
+                        [x.strip() == "" for x in patch_keys]
                 ):
                     vote = Counter()
                     first_appear_idx = dict()
@@ -268,6 +269,8 @@ def majority_voting(args):
                 patch_ids,
                 key=lambda i: (vote[patch_keys[i]], -first_appear_idx[patch_keys[i]]),
             )
+            if args.selected_patch_id_file is not None:
+                selected_patch_id_dict[instance_id] = maj_selected_id
 
             if args.target is not None and instance_id == args.target:
                 for patch in vote:
@@ -287,6 +290,9 @@ def majority_voting(args):
             }
 
             f.write(json.dumps(result) + "\n")
+    if args.selected_patch_id_file is not None:
+        with open(args.selected_patch_id_file, "w") as f:
+            json.dump(selected_patch_id_dict, f, indent=4)
 
 
 def normalize_patches(args):
@@ -328,6 +334,7 @@ def main():
     parser.add_argument("--deduplicate", action="store_true")
     parser.add_argument("--regression", action="store_true")
     parser.add_argument("--reproduction", action="store_true")
+    parser.add_argument("--selected_patch_id_file", type=str, default=None)
     parser.add_argument("--output_file", type=str, default="all_preds.jsonl")
     args = parser.parse_args()
 
