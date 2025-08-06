@@ -1,13 +1,15 @@
-import argparse
-import concurrent.futures
-import json
-import os
-from difflib import unified_diff
-from threading import Lock
+# Import standard and third-party libraries
+import argparse  # For parsing command-line arguments
+import concurrent.futures  # For multi-threaded execution
+import json  # For reading/writing JSON files
+import os  # For interacting with the file system
+from difflib import unified_diff  # For generating unified diffs between strings
+from threading import Lock  # For thread-safe write operations
 
-from datasets import load_dataset
-from tqdm import tqdm
+from datasets import load_dataset  # HuggingFace datasets loader
+from tqdm import tqdm  # Progress bar utility
 
+# Import internal utilities for token counting, model access, post-processing
 from agentless.util.api_requests import num_tokens_from_messages
 from agentless.util.model import make_model
 from agentless.util.postprocess_data import (
@@ -15,7 +17,6 @@ from agentless.util.postprocess_data import (
     check_syntax,
     extract_python_blocks,
     fake_git_repo,
-    lint_code,
     parse_diff_edit_commands,
     parse_edit_commands,
     parse_str_replace_edit_commands,
@@ -29,9 +30,13 @@ from agentless.util.preprocess_data import (
 )
 from agentless.util.utils import cleanup_logger, load_jsonl, setup_logger
 
+# Common instructions prepended to all repair prompts, indicating file context
 repair_relevant_file_instruction = """
 Below are some code segments, each from a relevant file. One or more of these files may contain bugs.
 """
+
+# Prompt variants for standard, CoT (Chain of Thought), diff-based, and str_replace-style edit commands
+# These are used depending on the arguments (e.g., --cot, --diff_format, --str_replace_format)
 repair_prompt_combine_topn = """
 We are currently solving the following issue within our repository. Here is the issue text:
 --- BEGIN ISSUE ---
@@ -156,6 +161,23 @@ def _post_process_multifile_repair(
     diff_format=False,
     str_replace_format=False,
 ) -> tuple[list[str], list[str]]:
+    """
+        Post-process raw model outputs containing `edit_file` commands
+        or diff-format/str_replace edits. Applies edits to file contents
+        and returns resulting new files and their content.
+
+        Parameters:
+            - raw_output: Model output string
+            - file_contents: Original file contents (dict)
+            - file_loc_intervals: Line intervals per file for editing
+            - diff_format: Whether output is unified diff format
+            - str_replace_format: Whether output is in str_replace format
+
+        Returns:
+            - edited_files: List of filenames that were edited
+            - new_contents: List of corresponding new file content
+        """
+
     if not str_replace_format:
         edit_multifile_commands = extract_python_blocks(raw_output)
     else:
@@ -235,10 +257,21 @@ def construct_topn_file_context(
     sticky_scroll: bool = False,
     no_line_number: bool = True,
 ):
-    """Concatenate provided locations to form a context.
-
-    loc: {"file_name_1": ["loc_str_1"], ...}
     """
+       Constructs a string containing top-N predicted relevant file content
+       and returns it along with the location intervals.
+
+       Parameters:
+           - file_to_locs: Mapping from file -> predicted edit locations
+           - pred_files: List of top-N files selected
+           - file_contents: Dictionary of file contents
+           - structure: Repository structure tree
+           - context_window: Number of lines before/after each predicted location
+
+       Returns:
+           - topn_content: Prompt-ready string of file content with context
+           - file_loc_intervals: Mapping of file -> list of line intervals used
+       """
     file_loc_intervals = dict()
     topn_content = ""
 
@@ -270,14 +303,36 @@ def construct_topn_file_context(
 
 
 def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
+    """
+    Run repair on a single instance.
+
+    - Checks whether patch is already generated for this instance.
+    - Prepares the relevant file context and edit locations.
+    - Constructs the repair prompt according to provided arguments.
+    - Queries the LLM backend for code edit suggestions (possibly with sampling).
+    - Post-processes the model's outputs into file patches and diffs.
+    - Writes results to the output JSONL file (thread-safe if needed).
+
+    Parameters:
+        - loc: dict, location information for this repair instance (including found_files and optionally found_edit_locs)
+        - args: argparse.Namespace, parsed command-line arguments
+        - swe_bench_data: list of dict, all ground-truth data from the benchmark dataset
+        - prev_o: list of dict, previously generated outputs (to avoid reprocessing)
+        - write_lock: threading.Lock, optional lock to synchronize writes in multi-threaded mode
+    """
+    # Extract the unique identifier for this repair instance
     instance_id = loc["instance_id"]
 
+    # If --target_id is set, skip instances that do not match (for targeted processing/debugging)
     if args.target_id is not None:
         if args.target_id != instance_id:
-            return
+            return None
 
+    # Prepare a logger that writes to a file specific to this instance
     log_file = os.path.join(args.output_folder, "repair_logs", f"{instance_id}.log")
     logger = setup_logger(log_file)
+
+    # Check if this instance was already processed (to avoid duplicated work)
     found = False
     for o in prev_o:
         if o["instance_id"] == instance_id:
@@ -289,6 +344,8 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
         return None
 
     logger.info(f"================ repairing {instance_id} ================")
+
+    # If no relevant files found for this instance, log and write an empty output
     if len(loc["found_files"]) == 0:
         if write_lock is not None:
             write_lock.acquire()
@@ -309,15 +366,22 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
             )
         if write_lock is not None:
             write_lock.release()
-        return
+        return None
 
+    # Select top-N relevant files for context
     pred_files = loc["found_files"][: args.top_n]
+
+    # Retrieve the ground-truth data (problem statement, repo, etc.) for this instance
     bench_data = [x for x in swe_bench_data if x["instance_id"] == instance_id][0]
     problem_statement = bench_data["problem_statement"]
+
+    # Load the repo structure and all file/class/function metadata (using utility)
     structure = get_repo_structure(
         instance_id, bench_data["repo"], bench_data["base_commit"], "playground"
     )
     files, _, _ = get_full_file_paths_and_classes_and_functions(structure)
+
+    # Initialize containers for results
     raw_outputs, counts, all_generations, traj, prev_contents, file_names = (
         [],
         [],
@@ -329,7 +393,9 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
 
     raw_output = ""
     topn_content = ""
-    # Construct file contents
+
+    # Build a mapping from file name to its full content string, for all top-N relevant files
+    # 拿到每个 Top-N 相关文件的完整内容，存到 file_contents 这个 dict 里。
     file_contents = dict()
     for i, pred_file in enumerate(pred_files):
         content = None
@@ -338,14 +404,21 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
                 content = "\n".join(file_content[1])
                 file_contents[pred_file] = content
                 break
-
+        # Sanity check: All predicted files must be found in the repo snapshot
         assert content is not None, f"{pred_file} file not found"
-    # Construct top-n file context
+
+    # TODO 压缩file_contents
+
+    # If fine-grained edit locations are provided (e.g., by a localization model), use them;
+    # otherwise, default to using the entire file context
+    # 如果有更细粒度的定位（比如行级别的 bug 位置），也会记录下来
     file_to_edit_locs = dict()
 
     if "found_edit_locs" in loc:
         file_to_edit_locs = loc["found_edit_locs"]
 
+    # Build the prompt context string (may include line intervals, sticky scroll, etc.)
+    # 真正拼接 context（construct_topn_file_context）
     topn_content, file_loc_intervals = construct_topn_file_context(
         file_to_edit_locs,
         pred_files,
@@ -359,6 +432,7 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
         sticky_scroll=args.sticky_scroll,
     )
 
+    # If the constructed prompt is empty, write an empty output and skip
     if topn_content.strip() == "":
         if write_lock is not None:
             write_lock.acquire()
@@ -381,6 +455,7 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
             write_lock.release()
         return
 
+    # Choose the prompt template based on the options for CoT, diff-format, or str_replace
     prompt_template = (
         repair_prompt_combine_topn_cot_str_replace
         if args.cot and args.str_replace_format
@@ -398,9 +473,12 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
     ).strip()
     logger.info(f"prompting with message:\n{message}")
 
+    # For each generation, will store all outputs, their trajectories, file contents, etc.
     all_generations, counts, traj, prev_contents, file_names = [], [], [], [], []
     sample_responses = []
-    # get greedy sample
+
+    # ===== 1. Greedy Sample Generation =====
+    # Set up the LLM with deterministic decoding (temperature=0)
     model = make_model(
         model=args.model,
         logger=logger,
@@ -409,7 +487,9 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
         temperature=0,
         batch_size=1,
     )
+
     if args.skip_greedy:
+        # If set, do not generate greedy sample, just use dummy response
         greedy_traj = {
             "response": "",
             "usage": {
@@ -419,6 +499,7 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
         }
     else:
         if args.mock:
+            # For mock runs, just calculate prompt tokens (no API call)
             greedy_traj = {
                 "response": "",
                 "usage": {
@@ -426,6 +507,7 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
                 },
             }
         else:
+            # Query the LLM backend: can use either plain or str_replace codegen function
             if args.str_replace_format:
                 greedy_traj = model.codegen_w_tool(
                     message, num_samples=1, prompt_cache=args.max_samples > 1
@@ -436,17 +518,20 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
                 )[0]
 
     sample_responses.append(greedy_traj)
-    # get temperature samples
+
+    # ===== 2. Temperature (Non-Greedy) Sampling =====
+    # Setup LLM for non-deterministic sampling (temperature=0.8)
     model = make_model(
         model=args.model,
         logger=logger,
         backend=args.backend,
         max_tokens=1024,
         temperature=0.8,
-        batch_size=args.max_samples - 1,  # minus the 1 greedy sample
+        batch_size=args.max_samples - 1,  # Use the rest of the samples for temperature search
     )
 
     if args.mock:
+        # For mock mode, just create dummy prompt tokens for each sample
         first_traj = {
             "response": "",
             "usage": {
@@ -463,7 +548,7 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
             sample_trajs = []
     else:
         if args.max_samples - 1:
-            # always use cached prompt if possible for later samples
+            # If more than one sample is requested, use prompt cache for efficiency
             if args.str_replace_format:
                 sample_trajs = model.codegen_w_tool(
                     message, num_samples=args.max_samples - 1, prompt_cache=True
@@ -477,19 +562,24 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
 
     sample_responses.extend(sample_trajs)
 
+    # ===== 3. Post-processing: Collect and Parse Model Outputs =====
     count = 0
     while count < args.max_samples:
         print(f"trying the {count + 1}-th sample ...")
         ret = sample_responses[count]
         count += 1
+
+        # Log each response and keep the prompt for reference
         traj.append({**ret, "prompt": message})
 
         if args.mock:
-            continue
+            continue  # In mock mode, skip actual post-processing
 
         raw_output = ret["response"]
         logger.info(f"raw output:\n{raw_output}")
         all_generations.append(raw_output)
+
+        # Parse the raw output and attempt to apply the edits to the file contents
         edited_files, new_contents = _post_process_multifile_repair(
             raw_output,
             file_contents,
@@ -499,6 +589,7 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
             str_replace_format=args.str_replace_format,
         )
 
+        # If the patch is empty or invalid, record empty results; otherwise, record full results
         if len(new_contents) == 0:
             prev_contents.append("")
             file_names.append("")
@@ -510,28 +601,41 @@ def process_loc(loc, args, swe_bench_data, prev_o, write_lock=None):
         counts.append(count)
         raw_outputs.append(raw_output)
 
+    # ===== 4. Write Result to Output File =====
+    # Acquire write lock if in multi-threaded mode
     if write_lock is not None:
         write_lock.acquire()
     with open(args.output_file, "a") as f:
         f.write(
             json.dumps(
                 {
-                    "instance_id": instance_id,
-                    "raw_output": raw_outputs,
-                    "all_generations": [all_generations],
-                    "try_count": counts,
-                    "traj": traj,
-                    "prev_content": [prev_contents],
-                    "file_names": [file_names],
+                    "instance_id": instance_id,            # Unique instance id
+                    "raw_output": raw_outputs,             # All raw model outputs
+                    "all_generations": [all_generations],  # All sampled generations
+                    "try_count": counts,                   # Sample index for each generation
+                    "traj": traj,                          # All decoding trajectories with prompts
+                    "prev_content": [prev_contents],       # File contents before patching (per sample)
+                    "file_names": [file_names],            # Filenames that were patched (per sample)
                 }
             )
             + "\n"
         )
+    # Release write lock after writing
     if write_lock is not None:
         write_lock.release()
 
 
+
 def repair(args):
+    """
+        Iterates over all instances and launches repair generation.
+
+        Uses multithreading if `--num_threads > 1`, otherwise sequential.
+        Also saves used location file.
+
+        Parameters:
+            - args: Parsed command-line arguments
+        """
     with open(f"{args.output_folder}/args.json", "w") as f:
         json.dump(vars(args), f, indent=4)
 
@@ -568,6 +672,18 @@ def repair(args):
 def post_process_raw_output(
     raw_output_text, file_contents, logger, file_loc_intervals, args
 ):
+    """
+        Applies the parsed model patch to a fake git repo to generate
+        unified diffs and filters them based on syntax validity and semantic change.
+
+        Returns:
+            - git_diffs: Cleaned diffs if patch is valid
+            - raw_git_diffs: Raw diff output
+            - contents: Original file contents
+            - edited_files: List of filenames that were edited
+            - new_contents: List of new file contents after applying patch
+        """
+
     git_diffs = ""
     raw_git_diffs = ""
     edited_files, new_contents, contents = [], [], []
@@ -607,8 +723,16 @@ def post_process_raw_output(
 
 def post_process_repair(args):
     """
-    apply some diff formatting.
-    """
+        Applies patch formatting to previously saved raw outputs.
+
+        For each raw generation:
+            - Retrieves the original content
+            - Post-processes and applies the edit
+            - Writes the final JSON result with git diff
+
+        Parameters:
+            - args: Parsed command-line arguments
+        """
     raw_outputs = load_jsonl(args.raw_output_file)
     locs = load_jsonl(args.loc_file)
 
@@ -730,6 +854,16 @@ def post_process_repair(args):
 
 
 def main():
+    """
+        Parses command-line arguments and executes the repair generation
+        or post-processing phase depending on the flags.
+
+        Modes:
+            - post_process: Post-process only
+            - gen_and_process: Run repair + post-process for all samples
+            - default: Run repair only
+        """
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--loc_file", type=str, required=True)
     parser.add_argument("--top_n", type=int, default=1)
